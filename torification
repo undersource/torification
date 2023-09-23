@@ -1,0 +1,83 @@
+#!/bin/bash
+
+local_dnsport=53
+tor_uid="tor"
+trans_port=9040
+
+check_uid() {
+    if [ $(whoami) != "root" ]; then
+        echo Permission denied
+        exit 1
+    fi
+}
+
+restart_tor() {
+    if [ -f "/usr/bin/systemctl" ]; then
+        systemctl restart tor
+    elif [ -f "/usr/bin/rc-service" ]; then
+        rc-service tor restart
+    elif [ -f "/usr/bin/sv" ]; then
+        sv restart tor
+    else
+        echo Unknown init system
+        exit 1
+    fi
+}
+
+flush() {
+    iptables -F
+    iptables -t nat -F
+}
+
+load() {
+    iptables -I OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,FIN ACK,FIN -j DROP
+
+    iptables -I OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,RST ACK,RST -j DROP
+
+    iptables -t nat -A OUTPUT -m owner --uid-owner $tor_uid -j RETURN
+
+    iptables -t nat -A OUTPUT -p udp --dport $local_dnsport -j REDIRECT --to-ports $local_dnsport
+
+    iptables -t nat -A OUTPUT -d 224.0.0.1 -j RETURN
+    iptables -t nat -A OUTPUT -d 127.0.0.0/9 -j RETURN
+    iptables -t nat -A OUTPUT -d 192.168.122.0/24 -j RETURN
+
+    iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports $trans_port
+
+    iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    iptables -A OUTPUT -d 224.0.0.1 -j ACCEPT
+    iptables -A OUTPUT -d 127.0.0.0/9 -j ACCEPT
+    iptables -A OUTPUT -d 192.168.122.0/24 -j ACCEPT
+
+    iptables -A OUTPUT -m owner --uid-owner $tor_uid -j ACCEPT
+    iptables -A OUTPUT -j REJECT
+}
+
+check_ip() {
+    curl 2ip.io
+}
+
+help() {
+    echo Args: start, stop, ip, help
+}
+
+if [ $# -eq 1 ]; then
+    if [ $1 == "start" ]; then
+        check_uid
+        restart_tor
+        flush
+        load
+    elif [ $1 == "stop" ]; then
+        check_uid
+        flush
+    elif [ $1 == "ip" ]; then
+        check_ip
+	elif [ $1 == "help" ]; then
+		help
+	else
+		echo Unknown argument, use \"help\"
+	fi
+else
+    help
+fi
